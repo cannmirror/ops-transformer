@@ -6,35 +6,34 @@
  * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
  * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
  * See LICENSE in the root of the software repository for the full text of the License.
- */
+*/
 
 /*!
- * \file moe_distribute_dispatch_teardown_tiling.cpp
- * \brief host侧tiling实现
+ * \file all_gather_matmul_v2_tiling_common.cpp
+ * \brief
  */
 
-#include "register/op_def_registry.h"
-#include "tiling_base/tiling_templates_registry.h"
 #include "mc2_log.h"
+#include "tiling_base/tiling_templates_registry.h"
+#include "graph/utils/type_utils.h"
+#include "register/op_def_registry.h"
+#include "platform/platform_infos_def.h"
+#include "all_gather_matmul_v2_tiling_common.h"
 
-using namespace Ops::Transformer::OpTiling;
 using namespace AscendC;
+using namespace ge;
 
 namespace optiling {
-
-ge::graphStatus MoeDistributeDispatchTeardownTilingFunc(gert::TilingContext* context)
-{
-    return TilingRegistry::GetInstance().DoTilingImpl(context);
-}
-
-ge::graphStatus TilingParseForMoeDistributeDispatchTeardown(gert::TilingParseContext* context)
+ge::graphStatus AllGatherMatmulTilingV2Func(gert::TilingContext* context);
+struct AllGatherMatmulCompileInfo {
+};
+ge::graphStatus TilingParseForAllGatherMatmulV2(gert::TilingParseContext* context)
 {
     (void)context;
     return ge::GRAPH_SUCCESS;
 }
 
-struct MoeDistributeDispatchTeardownCompileInfo {};
-IMPL_OP_OPTILING(MoeDistributeDispatchTeardown)
-    .Tiling(MoeDistributeDispatchTeardownTilingFunc)
-    .TilingParse<MoeDistributeDispatchTeardownCompileInfo>(TilingParseForMoeDistributeDispatchTeardown);
-} // namespace optiling
+IMPL_OP_OPTILING(AllGatherMatmulV2)
+    .Tiling(AllGatherMatmulTilingV2Func)
+    .TilingParse<AllGatherMatmulCompileInfo>(TilingParseForAllGatherMatmulV2);
+}  // namespace optiling
