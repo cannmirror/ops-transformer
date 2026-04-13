@@ -15,14 +15,16 @@ import itertools
 import math
 import os
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 import torch
+
 import check_valid_param
-import kv_quant_sparse_flash_attention_golden
 import result_compare_method
-from batch import kv_quant_sparse_flash_attention_process
+import sparse_flash_attention_golden
+from batch import sparse_flash_attention_process
 
 
 STR_MAP_DICT = {
@@ -33,6 +35,10 @@ STR_MAP_DICT = {
     "torch.bfloat16": torch.bfloat16,
     "torch.float16": torch.float16,
 }
+RESULT_COLUMNS = [
+    "Testcase_Name", "layout_query", "layout_kv", "q_type", "B", "S1", "S2",
+    "N1", "N2", "D", "K", "scale_value", "sparse_mode", "result", "fulfill_percent",
+]
 
 
 def _normalize_numeric_value(value):
@@ -48,8 +54,9 @@ def _normalize_numeric_value(value):
     return value
 
 
+
 def _parse_excel_cell_value(value):
-    # 将 Excel 中的字符串单元格转成 pytest 框架需要的 Python 类型。
+    # 将 Excel 单元格内容转换成 pytest 框架需要的 Python 类型。
     if isinstance(value, str):
         stripped = value.strip()
         if stripped in STR_MAP_DICT:
@@ -80,11 +87,10 @@ def load_excel_test_cases(excel_file_path, sheet_name):
 
     required_columns = [
         "Testcase_Prefix", "Testcase_Number",
-        "layout_query", "layout_kv", "q_type", "kv_dtype",
+        "layout_query", "layout_kv", "q_type",
         "B", "S1", "S2", "N1", "N2", "D", "K",
-        "scale_value", "key_quant_mode", "value_quant_mode",
-        "sparse_block_size", "tile_size", "rope_head_dim",
-        "sparse_mode", "attention_mode", "quant_scale_repo_mode",
+        "scale_value", "sparse_block_size", "rope_head_dim",
+        "sparse_mode", "attention_mode", "return_softmax_lse",
         "block_size", "block_num", "actual_seq_q", "actual_seq_kv",
     ]
     missing_columns = [column for column in required_columns if column not in dataframe.columns]
@@ -95,34 +101,36 @@ def load_excel_test_cases(excel_file_path, sheet_name):
 
 def save_result(params, result, fulfill_percent, result_path):
     # 把每个用例的执行结果统一追加到 result.xlsx。
+    if result_path is None:
+        return
+
     row_data = {
         "Testcase_Name": params[0],
         "layout_query": params[1],
         "layout_kv": params[2],
         "q_type": str(params[3]),
-        "kv_dtype": params[4],
-        "B": params[5],
-        "S1": params[6],
-        "S2": params[7],
-        "N1": params[8],
-        "N2": params[9],
-        "D": params[10],
-        "K": params[11],
-        "scale_value": params[12],
-        "sparse_mode": params[18],
+        "B": params[4],
+        "S1": params[5],
+        "S2": params[6],
+        "N1": params[7],
+        "N2": params[8],
+        "D": params[9],
+        "K": params[10],
+        "scale_value": params[11],
+        "sparse_mode": params[14],
         "result": result,
         "fulfill_percent": fulfill_percent,
     }
 
     if result_path.exists():
         dataframe = pd.read_excel(result_path)
-        if set(dataframe.columns) != set(row_data.keys()):
+        if list(dataframe.columns) != RESULT_COLUMNS:
             raise ValueError(
-                f"Result file columns mismatch, expect {list(row_data.keys())}, got {list(dataframe.columns)}"
+                f"Result file columns mismatch, expect {RESULT_COLUMNS}, got {list(dataframe.columns)}"
             )
         dataframe = pd.concat([dataframe, pd.DataFrame([row_data])], ignore_index=True)
     else:
-        dataframe = pd.DataFrame([row_data])
+        dataframe = pd.DataFrame([row_data], columns=RESULT_COLUMNS)
     dataframe.to_excel(result_path, index=False)
 
 
@@ -131,11 +139,10 @@ def combin_params(enabled_params, pytest_paramset=True):
     param_combination_set = []
     param_names = [
         "Testcase_Prefix", "Testcase_Number",
-        "layout_query", "layout_kv", "q_type", "kv_dtype",
+        "layout_query", "layout_kv", "q_type",
         "B", "S1", "S2", "N1", "N2", "D", "K",
-        "scale_value", "key_quant_mode", "value_quant_mode",
-        "sparse_block_size", "tile_size", "rope_head_dim",
-        "sparse_mode", "attention_mode", "quant_scale_repo_mode",
+        "scale_value", "sparse_block_size", "rope_head_dim",
+        "sparse_mode", "attention_mode", "return_softmax_lse",
         "block_size", "block_num", "actual_seq_q", "actual_seq_kv",
     ]
 
@@ -150,7 +157,6 @@ def combin_params(enabled_params, pytest_paramset=True):
             current_params.get("layout_query"),
             current_params.get("layout_kv"),
             current_params.get("q_type"),
-            current_params.get("kv_dtype"),
             current_params.get("B"),
             current_params.get("S1"),
             current_params.get("S2"),
@@ -159,34 +165,29 @@ def combin_params(enabled_params, pytest_paramset=True):
             current_params.get("D"),
             current_params.get("K"),
             current_params.get("scale_value"),
-            current_params.get("key_quant_mode"),
-            current_params.get("value_quant_mode"),
             current_params.get("sparse_block_size"),
-            current_params.get("tile_size"),
             current_params.get("rope_head_dim"),
             current_params.get("sparse_mode"),
             current_params.get("attention_mode"),
-            current_params.get("quant_scale_repo_mode"),
+            current_params.get("return_softmax_lse", [False]),
             current_params.get("block_size", [256]),
             current_params.get("block_num", [None]),
             current_params.get("actual_seq_q", [None]),
             current_params.get("actual_seq_kv", [None]),
         ]
 
-        print("param_values", param_values)
         for combo in itertools.product(*param_values):
             param_combination_set.append(dict(zip(param_names, combo)))
     return param_combination_set
 
 
-def qsfa(case_id, param_combination, pt_save_path, device_id, run_npu, save_pt, result_path):
+def sfa(case_id, param_combination, pt_save_path, device_id, run_npu, save_pt, result_path):
     # single/batch 共用入口：负责参数整理、校验、构造输入和可选执行。
-    testcase_prefix = param_combination.get("Testcase_Prefix") or "kvQuantSparseFlashAttn"
+    testcase_prefix = param_combination.get("Testcase_Prefix") or "sparseFlashAttention"
     testcase_number = param_combination.get("Testcase_Number") or case_id
     layout_query = param_combination["layout_query"]
     layout_kv = param_combination["layout_kv"]
     q_type = param_combination["q_type"]
-    kv_dtype = param_combination["kv_dtype"]
     B = param_combination["B"]
     S1 = param_combination["S1"]
     S2 = param_combination["S2"]
@@ -195,14 +196,11 @@ def qsfa(case_id, param_combination, pt_save_path, device_id, run_npu, save_pt, 
     D = param_combination["D"]
     K = param_combination["K"]
     scale_value = param_combination["scale_value"]
-    key_quant_mode = param_combination["key_quant_mode"]
-    value_quant_mode = param_combination["value_quant_mode"]
     sparse_block_size = param_combination["sparse_block_size"]
-    tile_size = param_combination["tile_size"]
     rope_head_dim = param_combination["rope_head_dim"]
     sparse_mode = param_combination["sparse_mode"]
     attention_mode = param_combination["attention_mode"]
-    quant_scale_repo_mode = param_combination["quant_scale_repo_mode"]
+    return_softmax_lse = param_combination.get("return_softmax_lse", False)
     block_size = param_combination.get("block_size") or 256
     block_num = param_combination.get("block_num")
     actual_seq_q = param_combination.get("actual_seq_q")
@@ -215,15 +213,14 @@ def qsfa(case_id, param_combination, pt_save_path, device_id, run_npu, save_pt, 
     )
 
     if layout_kv == "PA_BSND" and block_num is None:
-        # 未显式给出 block_num 时，按当前实际 kv 长度自动推导。
         max_kv = max(actual_seq_kv) if actual_seq_kv else S2
         block_num = math.ceil(max_kv / block_size) * B
 
     params = (
-        testcase_name, layout_query, layout_kv, q_type, kv_dtype,
+        testcase_name, layout_query, layout_kv, q_type,
         B, S1, S2, N1, N2, D, K,
-        scale_value, key_quant_mode, value_quant_mode, sparse_block_size,
-        tile_size, rope_head_dim, sparse_mode, attention_mode, quant_scale_repo_mode,
+        scale_value, sparse_block_size, rope_head_dim,
+        sparse_mode, attention_mode, return_softmax_lse,
         block_size, block_num, actual_seq_q, actual_seq_kv,
     )
 
@@ -232,27 +229,28 @@ def qsfa(case_id, param_combination, pt_save_path, device_id, run_npu, save_pt, 
     except ValueError as error:
         pytest.skip(f"输入参数校验失败: {error}")
 
-    test_data = kv_quant_sparse_flash_attention_golden.generate_and_save_testdata(
+    test_data = sparse_flash_attention_golden.generate_and_save_testdata(
         params, save_pt=save_pt, save_path=pt_save_path, compute_golden=False
     )
     if run_npu:
-        qsfa_run_npu(test_data, device_id=device_id, result_path=result_path)
+        sfa_run_npu(test_data, device_id=device_id, result_path=result_path)
 
 
-def qsfa_run_npu(test_data, device_id=0, result_path=Path("result.xlsx")):
+def sfa_run_npu(test_data, device_id=0, result_path=Path("result.xlsx")):
     # 回放 NPU 执行，并根据 cpu_output 决定是否做精度对比。
     try:
-        npu_result, cpu_result = kv_quant_sparse_flash_attention_process.test_qsfa_process_ci(
+        npu_result, cpu_result = sparse_flash_attention_process.test_sfa_process_ci(
             test_data, device_id=device_id
         )
 
         if cpu_result is None:
-            print(npu_result)
+            print(npu_result[0] if isinstance(npu_result, tuple) else npu_result)
             print("CPU golden 不可用，当前用例仅验证 NPU 连通性，跳过精度对比。")
             result = "SkipCompare"
             fulfill_percent = 100.0
         else:
-            result, fulfill_percent = result_compare_method.check_result(cpu_result, npu_result)
+            target_npu = npu_result[0] if isinstance(npu_result, tuple) else npu_result
+            result, fulfill_percent = result_compare_method.check_result(cpu_result, target_npu)
     except Exception as error:
         print(f"NPU ERROR: {error}")
         result = "NPU ERROR"
