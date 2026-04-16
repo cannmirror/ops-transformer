@@ -1,6 +1,6 @@
-# aclnnMoeFinalizeRoutingV2
+# aclnnMoeFinalizeRoutingV3
 
-[📄 查看源码](https://gitcode.com/cann/ops-transformer/tree/master/moe/moe_finalize_routing_v2)
+[📄 查看源码](https://gitcode.com/cann/ops-transformer/tree/master/moe/moe_finalize_routing_v3)
 
 ## 产品支持情况
 
@@ -15,23 +15,20 @@
 
 ## 功能说明
 
-- **接口功能**：MoE计算中，最后处理合并MoE FFN的输出结果。
+- **接口功能**：MoE计算中，最后处理合并MoE FFN的输出结果。本接口针对V2接口aclnnMoeFinalizeRoutingV2做出如下变更，请根据实际情况选择合适的接口：
+  1. 兼顾V2原有功能的情况下，增加零计算专家、拷贝专家和常量专家的计算，计算公式变更如下。
 - **计算公式**：
 
-  $$
-  expertid=expertIdx[i,k]
-  $$
-   
-  $$
-  out(i,j)=x1_{i,j}+x2_{i,j}+\sum_{k=0}^{K}(scales_{i,k}*(expandedX_{expandedRowIdx_{i+k*num\_rows},j}+bias_{expertid,j}))
-  $$
+$$
+\begin{aligned} &\mathrm{expertId} = \mathrm{expertIdx}[i,k] \\ &\text{if } \mathrm{expertId} \in \mathrm{zero\_expert\_range}:\\&\quad \text{skip}; \\&\text{elif } \mathrm{expertId} \in \mathrm{copy\_expert\_range}: \\ &\quad x = x[i] \\ &\quad \mathrm{out}(i, j) = x1_{i, j} + x2_{i, j} + \sum_{k=1}^{K}\mathrm{scales}_{i,k} \cdot \left(x + \mathrm{bias}_{mathrm{expertId},j}\right) \\ &\text{elif } \mathrm{expertId} \in \mathrm{constant\_expert\_range}: \\&\quad x = \alpha_1 \cdot x[i] + \alpha_2 \cdot v \\ &\quad \mathrm{out}(i, j) = x1_{i, j} + x2_{i, j} + \sum_{k=1}^{K}\mathrm{scales}_{i,k} \cdot \left(x + \mathrm{bias}_mathrm{expertId},j\right) \\ &\text{else}: \\ &\quad \mathrm{out}(i, j) = x1_{i, j} + x2_{i, j} + \sum_{k=0}^{K}\mathrm{scales}_{i,k} \cdot\big(\mathrm{expandedX}_{\mathrm{expandedRowIdx}_{i\cdot K+k},j} + \mathrm{bias}_{\mathrm{expertid}_{i\cdot K+k},j}\big) \end{aligned}
+$$
 
 ## 函数原型
 
-每个算子分为[两段式接口](../../../docs/zh/context/两段式接口.md)，必须先调用“aclnnMoeFinalizeRoutingV2GetWorkspaceSize”接口获取计算所需workspace大小以及包含了算子计算流程的执行器，再调用“aclnnMoeFinalizeRoutingV2”接口执行计算。
+每个算子分为[两段式接口](../../../docs/zh/context/两段式接口.md)，必须先调用“aclnnMoeFinalizeRoutingV3GetWorkspaceSize”接口获取计算所需workspace大小以及包含了算子计算流程的执行器，再调用“aclnnMoeFinalizeRoutingV3”接口执行计算。
 
 ```c++
-aclnnStatus aclnnMoeFinalizeRoutingV2GetWorkspaceSize(
+aclnnStatus aclnnMoeFinalizeRoutingV3GetWorkspaceSize(
     const aclTensor *expandedX,
     const aclTensor *expandedRowIdx,
     const aclTensor *x1Optional,
@@ -39,21 +36,28 @@ aclnnStatus aclnnMoeFinalizeRoutingV2GetWorkspaceSize(
     const aclTensor *biasOptional,
     const aclTensor *scalesOptional,
     const aclTensor *expertIdxOptional,
-    int64_t          dropPadMode,
+    const aclTensor* xOptional,
+    const aclTensor* a1Optional,
+    const aclTensor* a2Optional,
+    const aclTensor* vOptional,
+    int64_t           dropPadMode,
+    const aclIntArray* zeroExpertRange,
+    const aclIntArray* copyExpertRange,
+    const aclIntArray* constantExpertRange, 
     const aclTensor *out,
     uint64_t        *workspaceSize,
     aclOpExecutor  **executor)
 ```
 
 ```c++
-aclnnStatus aclnnMoeFinalizeRoutingV2(
+aclnnStatus aclnnMoeFinalizeRoutingV3(
     void          *workspace,
     uint64_t       workspaceSize,
     aclOpExecutor *executor,
     aclrtStream    stream)
 ```
 
-## aclnnMoeFinalizeRoutingV2GetWorkspaceSize
+## aclnnMoeFinalizeRoutingV3GetWorkspaceSize
 
 - **参数说明：**
 
@@ -80,14 +84,14 @@ aclnnStatus aclnnMoeFinalizeRoutingV2(
   </tr></thead>
   <tbody>
   <tr>
-        <td>expandedX</td>
-        <td>输入</td>
-        <td>公式中的expandedX ，MoE的FFN输出。</td>
-        <td>-</td>
-        <td>FLOAT16、BFLOAT16、FLOAT32</td>
-        <td>ND</td>
-        <td>drop less场景：(NUM_ROWS * K, H)，<br>drop pad场景：(E, C, H)。</td>
-        <td>√</td>
+    <td>expandedX</td>
+    <td>输入</td>
+    <td>公式中的expandedX ，MoE的FFN输出。</td>
+    <td>-</td>
+    <td>FLOAT16、BFLOAT16、FLOAT32</td>
+    <td>ND</td>
+    <td>drop less场景：(NUM_ROWS * K, H)，<br>drop pad场景：(E, C, H)。</td>
+    <td>√</td>
   </tr>
   <tr>
     <td>expandedRowIdx</td>
@@ -150,6 +154,46 @@ aclnnStatus aclnnMoeFinalizeRoutingV2(
     <td>√</td>
   </tr>
   <tr>
+    <td>xOptional</td>
+    <td>输入</td>
+    <td>公式中的x。</td>
+    <td>-</td>
+    <td>与expandedX一致。</td>
+    <td>ND</td>
+    <td>(NUM_ROWS, H)</td>
+    <td>√</td>
+  </tr>
+  <tr>
+    <td>a1Optional</td>
+    <td>输入</td>
+    <td>公式中的a1。</td>
+    <td>-</td>
+    <td>与expandedX一致。</td>
+    <td>ND</td>
+    <td>(Constant_Expert_Range_Num, H)</td>
+    <td>√</td>
+  </tr>
+  <tr>
+    <td>a2Optional</td>
+    <td>输入</td>
+    <td>公式中的a2。</td>
+    <td>-</td>
+    <td>与expandedX一致。</td>
+    <td>ND</td>
+    <td>(Constant_Expert_Range_Num, H)</td>
+    <td>√</td>
+  </tr>
+  <tr>
+    <td>vOptional</td>
+    <td>输入</td>
+    <td>公式中的v。</td>
+    <td>-</td>
+    <td>与expandedX一致。</td>
+    <td>ND</td>
+    <td>(Constant_Expert_Range_Num, H)</td>
+    <td>√</td>
+  </tr>
+  <tr>
     <td>dropPadMode</td>
     <td>输入</td>
     <td>表示是否支持丢弃模式,expandedRowIdx的排列方式。</td>
@@ -157,6 +201,33 @@ aclnnStatus aclnnMoeFinalizeRoutingV2(
     <td>-</td>
     <td>-</td>
     <td>-</td>
+    <td>-</td>
+  </tr>
+  <tr>
+    <td>zeroExpertRange</td>
+    <td>输入</td>
+    <td>表示zero expert的范围，数组内的值为[zeroExpertStart, zeroExpertEnd], 左闭右开，要求值大于0，并且zeroExpertEnd大于zeroExpertStart，zeroExpertEnd不大于expertIdxOptional的最大值。</td>
+    <td>取值范围与expertIdxOptional一致</td>
+    <td>-</td>
+    <td>2</td>
+    <td>-</td>
+  </tr>
+  <tr>
+    <td>copyExpertRange</td>
+    <td>输入</td>
+    <td>表示copy expert的范围。数组内的值为[copyExpertStart, copyExpertEnd], 左闭右开，要求值大于0，并且copyExpertEnd大于copyExpertStart，copyExpertEnd不大于expertIdxOptional的最大值。</td>
+    <td>取值范围与expertIdxOptional一致</td>
+    <td>-</td>
+    <td>2</td>
+    <td>-</td>
+  </tr>
+    <tr>
+    <td>constantExpertRange</td>
+    <td>输入</td>
+    <td>表示costant expert的范围。数组内的值为[constantExpertStart, constantExpertEnd], 左闭右开，要求值大于0，并且constantExpertEnd大于constantExpertStart，constantExpertEnd不大于expertIdxOptional的最大值。</td>
+    <td>取值范围与expertIdxOptional一致</td>
+    <td>-</td>
+    <td>2</td>
     <td>-</td>
   </tr>
   <tr>
@@ -242,7 +313,7 @@ aclnnStatus aclnnMoeFinalizeRoutingV2(
     </tr>
   </tbody></table>
 
-## aclnnMoeFinalizeRoutingV2
+## aclnnMoeFinalizeRoutingV3
 
 - **参数说明：**
 
@@ -266,7 +337,7 @@ aclnnStatus aclnnMoeFinalizeRoutingV2(
   <tr>
     <td>workspaceSize</td>
     <td>输入</td>
-    <td>在Device侧申请的workspace大小，由第一段接口<code>aclnnMoeFinalizeRoutingV2GetWorkspaceSize</code>获取。</td>
+    <td>在Device侧申请的workspace大小，由第一段接口<code>aclnnMoeFinalizeRoutingV3GetWorkspaceSize</code>获取。</td>
   </tr>
   <tr>
     <td>executor</td>
@@ -288,7 +359,7 @@ aclnnStatus aclnnMoeFinalizeRoutingV2(
 ## 约束说明
 
 1. 确定性计算：
-    - aclnnMoeFinalizeRoutingV2默认确定性实现。
+    - aclnnMoeFinalizeRoutingV3默认确定性实现。
 
 2. NUM\_ROWS：表示行数；  
     - K：表示从总的专家E中选出K个专家；  
@@ -449,19 +520,20 @@ int main() {
   uint64_t workspaceSize = 0;
   aclOpExecutor* executor;
 
-  // 调用aclnnMoeFinalizeRoutingV2第一段接口
-  ret = aclnnMoeFinalizeRoutingV2GetWorkspaceSize(expandedX, expandedRowIdx, x1, x2Optional, bias, scales,
-                                                  expandedExpertIdx, dropPadMode, out, &workspaceSize, &executor);
-  CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("aclnnMoeFinalizeRoutingV2GetWorkspaceSize failed. ERROR: %d\n", ret); return ret);
+  // 调用aclnnMoeFinalizeRoutingV3第一段接口
+  ret = aclnnMoeFinalizeRoutingV3GetWorkspaceSize(expandedX, expandedRowIdx, x1, x2Optional, bias, scales,
+                                                  expandedExpertIdx, nullptr, nullptr, nullptr, nullptr,
+                                                  dropPadMode, nullptr, nullptr, nullptr, out, &workspaceSize, &executor);
+  CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("aclnnMoeFinalizeRoutingV3GetWorkspaceSize failed. ERROR: %d\n", ret); return ret);
   // 根据第一段接口计算出的workspaceSize申请device内存
   void* workspaceAddr = nullptr;
   if (workspaceSize > 0) {
       ret = aclrtMalloc(&workspaceAddr, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST);
       CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("allocate workspace failed. ERROR: %d\n", ret); return ret);
   }
-  // 调用aclnnMoeFinalizeRoutingV2第二段接口
-  ret = aclnnMoeFinalizeRoutingV2(workspaceAddr, workspaceSize, executor, stream);
-  CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("aclnnMoeFinalizeRoutingV2 failed. ERROR: %d\n", ret); return ret);
+  // 调用aclnnMoeFinalizeRoutingV3第二段接口
+  ret = aclnnMoeFinalizeRoutingV3(workspaceAddr, workspaceSize, executor, stream);
+  CHECK_RET(ret == ACL_SUCCESS, LOG_PRINT("aclnnMoeFinalizeRoutingV3 failed. ERROR: %d\n", ret); return ret);
 
   // 4.（ 固定写法）同步等待任务执行结束
   ret = aclrtSynchronizeStream(stream);

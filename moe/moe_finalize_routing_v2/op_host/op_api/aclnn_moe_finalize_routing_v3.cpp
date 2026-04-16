@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * Copyright (c) 2026 Huawei Technologies Co., Ltd.
  * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
  * CANN Open Software License Agreement Version 2.0 (the "License").
  * Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -8,7 +8,7 @@
  * See LICENSE in the root of the software repository for the full text of the License.
  */
 
-#include "aclnn_moe_finalize_routing_v2.h"
+#include "aclnn_moe_finalize_routing_v3.h"
 #include "opdev/make_op_executor.h"
 #include "opdev/op_dfx.h"
 #include "opdev/op_executor.h"
@@ -24,17 +24,19 @@ using namespace op;
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-ACLNN_API aclnnStatus aclnnMoeFinalizeRoutingV2GetWorkspaceSize(
+ACLNN_API aclnnStatus aclnnMoeFinalizeRoutingV3GetWorkspaceSize(
     const aclTensor* expandedX, const aclTensor* expandedRowIdx, const aclTensor* x1Optional,
     const aclTensor* x2Optional, const aclTensor* biasOptional, const aclTensor* scalesOptional,
-    const aclTensor* expertIdxOptional, int64_t dropPadMode, const aclTensor* out,
+    const aclTensor* expertIdxOptional, const aclTensor* xOptional, const aclTensor* a1Optional,
+    const aclTensor* a2Optional, const aclTensor* vOptional, int64_t dropPadMode, const aclIntArray* zeroExpertRange,
+    const aclIntArray* copyExpertRange, const aclIntArray* constantExpertRange, const aclTensor* out,
     uint64_t* workspaceSize, aclOpExecutor** executor)
 {
-    OP_CHECK_COMM_INPUT(workspaceSize, executor);
-    L2_DFX_PHASE_1(aclnnMoeFinalizeRoutingV2,
+    L2_DFX_PHASE_1(aclnnMoeFinalizeRoutingV3,
         DFX_IN(expandedX, expandedRowIdx, x1Optional, x2Optional, biasOptional,
-            scalesOptional, expertIdxOptional, dropPadMode),
+               scalesOptional, expertIdxOptional, xOptional, a1Optional,
+               a2Optional, vOptional, dropPadMode, zeroExpertRange,
+               copyExpertRange, constantExpertRange),
         DFX_OUT(out));
 
     // 参数检查
@@ -81,11 +83,36 @@ ACLNN_API aclnnStatus aclnnMoeFinalizeRoutingV2GetWorkspaceSize(
         CHECK_RET(expertIdxContiguous != nullptr, ACLNN_ERR_INNER_NULLPTR);
     }
 
+    const aclTensor* xContiguous = nullptr;
+    if (xOptional != nullptr) {
+        xContiguous = l0op::Contiguous(xOptional, uniqueExecutor.get());
+        CHECK_RET(xContiguous != nullptr, ACLNN_ERR_INNER_NULLPTR);
+    }
+
+    const aclTensor* a1Contiguous = nullptr;
+    if (a1Optional != nullptr) {
+        a1Contiguous = l0op::Contiguous(a1Optional, uniqueExecutor.get());
+        CHECK_RET(a1Contiguous != nullptr, ACLNN_ERR_INNER_NULLPTR);
+    }
+
+    const aclTensor* a2Contiguous = nullptr;
+    if (a2Optional != nullptr) {
+        a2Contiguous = l0op::Contiguous(a2Optional, uniqueExecutor.get());
+        CHECK_RET(a2Contiguous != nullptr, ACLNN_ERR_INNER_NULLPTR);
+    }
+
+    const aclTensor* vContiguous = nullptr;
+    if (vOptional != nullptr) {
+        vContiguous = l0op::Contiguous(vOptional, uniqueExecutor.get());
+        CHECK_RET(vContiguous != nullptr, ACLNN_ERR_INNER_NULLPTR);
+    }
+
     // 调用l0接口进行计算，传入out参数
     auto out_ = l0op::MoeFinalizeRoutingV2(expandedXContiguous, expandedRowIdxContiguous, x1Contiguous,
-                                           x2Contiguous, biasContiguous, scalesContiguous,
-                                           expertIdxContiguous, nullptr, nullptr, nullptr, nullptr,
-                                           dropPadMode, nullptr, nullptr, nullptr, out, uniqueExecutor.get());
+                                           x2Contiguous, biasContiguous, scalesContiguous, expertIdxContiguous,
+                                           xContiguous, a1Contiguous, a2Contiguous, vContiguous,
+                                           dropPadMode, zeroExpertRange, copyExpertRange, constantExpertRange,
+                                           out, uniqueExecutor.get());
     CHECK_RET(out_ != nullptr, ACLNN_ERR_INNER_NULLPTR);
 
     // copyout结果，如果出参out是非连续Tensor，需要把计算完的连续Tensor转非连续
@@ -98,10 +125,10 @@ ACLNN_API aclnnStatus aclnnMoeFinalizeRoutingV2GetWorkspaceSize(
     return ACLNN_SUCCESS;
 }
 
-ACLNN_API aclnnStatus aclnnMoeFinalizeRoutingV2(
+ACLNN_API aclnnStatus aclnnMoeFinalizeRoutingV3(
     void* workspace, uint64_t workspaceSize, aclOpExecutor* executor, aclrtStream stream)
 {
-    L2_DFX_PHASE_2(aclnnMoeFinalizeRoutingV2);
+    L2_DFX_PHASE_2(aclnnMoeFinalizeRoutingV3);
     return CommonOpExecutorRun(workspace, workspaceSize, executor, stream);
 }
 
