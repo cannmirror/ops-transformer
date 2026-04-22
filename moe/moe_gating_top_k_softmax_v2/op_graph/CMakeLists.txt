@@ -8,7 +8,7 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-message(STATUS "=== Debug: start ops.moe.moe_init_routing_v3.op_graph.CMakeLists.txt ")
+message(STATUS "=== Debug: start ops.moe.moe_gating_top_k_softmax_v2.op_graph.CMakeLists.txt")
 if (BUILD_OPEN_PROJECT)
     add_graph_plugin_sources()
 endif()
