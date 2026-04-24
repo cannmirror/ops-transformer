@@ -10,7 +10,7 @@
 
 /*!
  * \file test_moe_distribute_combine_setup_tiling.cpp
- * \brief 算子tiling UT
+ * \brief 算子tiling UT for arch32异常测试
  */
 
 #include <iostream>
@@ -21,38 +21,27 @@
 #include <gtest/gtest.h>
 #include "mc2_tiling_case_executor.h"
 
-namespace MoeDistributeCombineSetupUT {
+namespace MoeDistributeCombineSetupArch32UT {
 
 static const std::string OP_NAME = "MoeDistributeCombineSetup";
 
 struct MoeDistributeCombineSetupTestParam {
     std::string caseName;
-    // expand_x
     std::initializer_list<int64_t> expandXShape;
     ge::DataType expandXDtype;
     ge::Format expandXFormat;
-
-    // expert_ids
     std::initializer_list<int64_t> expertIdsShape;
     ge::DataType expertIdsDtype;
     ge::Format expertIdsFormat;
-
-    // assist_info_for_combine
     std::initializer_list<int64_t> assistInfoShape;
     ge::DataType assistInfoDtype;
     ge::Format assistInfoFormat;
-
-    // quant_expand_x
     std::initializer_list<int64_t> quantExpandXShape;
     ge::DataType quantExpandXDtype;
     ge::Format quantExpandXFormat;
-
-    // comm_cmd_info
     std::initializer_list<int64_t> commCmdInfoShape;
     ge::DataType commCmdInfoDtype;
     ge::Format commCmdInfoFormat;
-
-    // attrs
     std::string groupAttr;
     int64_t epWorldSize;
     int64_t epRankId;
@@ -64,10 +53,7 @@ struct MoeDistributeCombineSetupTestParam {
     int64_t commQuantMode;
     int64_t commType;
     std::string commAlgAttr;
-
-    // soc version
     std::string socVersion;
-    // expert result
     ge::graphStatus status;
     uint64_t expectTilingKey;
     std::string expectTilingData;
@@ -80,17 +66,12 @@ inline std::ostream &operator<<(std::ostream &os, const MoeDistributeCombineSetu
     return os << param.caseName;
 }
 
-// 用例列表集
 static MoeDistributeCombineSetupTestParam g_testCases[] = {
     // 正常用例
     {"test_aclnn_moe_distribute_combine_setup_normal_1", {192, 4096}, ge::DT_FLOAT16, ge::FORMAT_ND, {16, 6}, ge::DT_INT32, ge::FORMAT_ND, {24576}, ge::DT_INT32, ge::FORMAT_ND, {192, 6144}, ge::DT_INT8, ge::FORMAT_ND, {3104}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 2, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
     {"test_aclnn_moe_distribute_combine_setup_normal_2", {512, 4096}, ge::DT_FLOAT16, ge::FORMAT_ND, {16, 6}, ge::DT_INT32, ge::FORMAT_ND, {65536}, ge::DT_INT32, ge::FORMAT_ND, {512, 6144}, ge::DT_INT8, ge::FORMAT_ND, {8320}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 8, 0, 32, 0, 0, 0, 128, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
     {"test_aclnn_moe_distribute_combine_setup_normal_3", {192, 4096}, ge::DT_BF16, ge::FORMAT_ND, {16, 6}, ge::DT_INT32, ge::FORMAT_ND, {24576}, ge::DT_INT32, ge::FORMAT_ND, {192, 6144}, ge::DT_INT8, ge::FORMAT_ND, {3104}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 2, 0, 32, 0, 0, 0, 32, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
     {"test_aclnn_moe_distribute_combine_setup_normal_4", {512, 4096}, ge::DT_BF16, ge::FORMAT_ND, {16, 6}, ge::DT_INT32, ge::FORMAT_ND, {65536}, ge::DT_INT32, ge::FORMAT_ND, {512, 6144}, ge::DT_INT8, ge::FORMAT_ND, {8320}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 8, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
-    {"test_aclnn_moe_distribute_combine_setup_normal_5_h7168_ep2", {96, 7168}, ge::DT_FLOAT16, ge::FORMAT_ND, {8, 6}, ge::DT_INT32, ge::FORMAT_ND, {12288}, ge::DT_INT32, ge::FORMAT_ND, {96, 10752}, ge::DT_INT8, ge::FORMAT_ND, {1568}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 2, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
-    {"test_aclnn_moe_distribute_combine_setup_normal_6_ep4_h7168_k8", {512, 7168}, ge::DT_BF16, ge::FORMAT_ND, {16, 8}, ge::DT_INT32, ge::FORMAT_ND, {65536}, ge::DT_INT32, ge::FORMAT_ND, {512, 10752}, ge::DT_INT8, ge::FORMAT_ND, {8256}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 4, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
-    {"test_aclnn_moe_distribute_combine_setup_normal_7_bs256_k8", {8192, 4096}, ge::DT_FLOAT16, ge::FORMAT_ND, {256, 8}, ge::DT_INT32, ge::FORMAT_ND, {1048576}, ge::DT_INT32, ge::FORMAT_ND, {8192, 6144}, ge::DT_INT8, ge::FORMAT_ND, {131200}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 8, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
-    {"test_aclnn_moe_distribute_combine_setup_normal_8_ep4_bf16", {192, 4096}, ge::DT_BF16, ge::FORMAT_ND, {8, 6}, ge::DT_INT32, ge::FORMAT_ND, {24576}, ge::DT_INT32, ge::FORMAT_ND, {192, 6144}, ge::DT_INT8, ge::FORMAT_ND, {3136}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 4, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_SUCCESS, 0UL, "", {16777216}, 0},
     // 异常用例
     {"test_aclnn_moe_distribute_combine_setup_invalid_expand_x_dtype", {512, 4096}, ge::DT_INT32, ge::FORMAT_ND, {16, 6}, ge::DT_INT32, ge::FORMAT_ND, {65536}, ge::DT_INT32, ge::FORMAT_ND, {512, 6144}, ge::DT_INT8, ge::FORMAT_ND, {8320}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 8, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_FAILED, 0UL, "", {16777216}, 0},
     {"test_aclnn_moe_distribute_combine_setup_invalid_expert_ids_dtype", {512, 4096}, ge::DT_FLOAT16, ge::FORMAT_ND, {16, 6}, ge::DT_FLOAT16, ge::FORMAT_ND, {65536}, ge::DT_INT32, ge::FORMAT_ND, {512, 6144}, ge::DT_INT8, ge::FORMAT_ND, {8320}, ge::DT_INT32, ge::FORMAT_ND, "group_ep", 8, 0, 32, 0, 0, 0, 0, 0, 2, "", "3510", ge::GRAPH_FAILED, 0UL, "", {16777216}, 0},
@@ -146,17 +127,16 @@ static MoeDistributeCombineSetupTestParam g_testCases[] = {
     {"test_aclnn_moe_distribute_combine_setup_invalid_group_ep_too_long", {64, 4096}, ge::DT_BF16, ge::FORMAT_ND, {16, 6}, ge::DT_INT32, ge::FORMAT_ND, {4096}, ge::DT_INT32, ge::FORMAT_ND, {32, 6144}, ge::DT_INT8, ge::FORMAT_ND, {544}, ge::DT_INT32, ge::FORMAT_ND, "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789", 2, 0, 32, 0, 1, 1, 0, 0, 2, "", "3510", ge::GRAPH_FAILED, 0UL, "", {16777216}, 0},
 };
 
-// setup & teardown
-class MoeDistributeCombineSetupArch35TilingTest : public testing::TestWithParam<MoeDistributeCombineSetupTestParam> {
+class MoeDistributeCombineSetupArch32TilingTest : public testing::TestWithParam<MoeDistributeCombineSetupTestParam> {
 protected:
     static void SetUpTestCase()
     {
-        std::cout << "MoeDistributeCombineSetupArch35TilingTest SetUp." << std::endl;
+        std::cout << "MoeDistributeCombineSetupArch32TilingTest SetUp." << std::endl;
     }
 
     static void TearDownTestCase()
     {
-        std::cout << "MoeDistributeCombineSetupArch35TilingTest TearDown." << std::endl;
+        std::cout << "MoeDistributeCombineSetupArch32TilingTest TearDown." << std::endl;
     }
 };
 
@@ -168,14 +148,13 @@ gert::StorageShape make_shape(const std::initializer_list<int64_t> &input_shape)
     return gert::StorageShape{input_shape, input_shape};
 }
 
-static struct MoeDistributeCombineSetupCompileInfo {
-} compileInfo;
+struct MoeDistributeCombineSetupCompileInfo {};
+static MoeDistributeCombineSetupCompileInfo compileInfo{};
 
 static gert::TilingContextPara BuildTilingContextPara(const MoeDistributeCombineSetupTestParam &param)
 {
     std::cout << "[TEST_CASE] " << param.caseName << std::endl;
 
-    // 参数封装
     std::vector<gert::TilingContextPara::TensorDescription> inputTensorDesc_(
         {{make_shape(param.expandXShape), param.expandXDtype, param.expandXFormat},
          {make_shape(param.expertIdsShape), param.expertIdsDtype, param.expertIdsFormat},
@@ -202,35 +181,7 @@ static gert::TilingContextPara BuildTilingContextPara(const MoeDistributeCombine
                                    param.socVersion);
 }
 
-static void ThreadFunction(const MoeDistributeCombineSetupTestParam *testCases, size_t caseNum, size_t threadIdx,
-                           size_t threadNum)
-{
-    for (size_t idx = threadIdx; idx < caseNum; idx += threadNum) {
-        auto param = testCases[idx];
-        auto tilingContextPara = BuildTilingContextPara(param);
-        ExecuteTestCase(tilingContextPara, param.status, param.expectTilingKey, param.expectTilingData,
-                        param.expectWorkspaces, param.mc2TilingDataReservedLen);
-    }
-}
-
-static void TestExecMultiThread(const MoeDistributeCombineSetupTestParam *testCases, size_t testCaseNum,
-                                size_t threadNum)
-{
-    std::thread threads[threadNum];
-    for (size_t idx = 0; idx < threadNum; ++idx) {
-        threads[idx] = std::thread(ThreadFunction, testCases, testCaseNum, idx, threadNum);
-    }
-    for (size_t idx = 0; idx < threadNum; ++idx) {
-        threads[idx].join();
-    }
-}
-
-TEST_F(MoeDistributeCombineSetupArch35TilingTest, GeneralCasesMultiThread)
-{
-    TestExecMultiThread(g_testCases, sizeof(g_testCases) / sizeof(MoeDistributeCombineSetupTestParam), 3);
-}
-
-TEST_P(MoeDistributeCombineSetupArch35TilingTest, GeneralCases)
+TEST_P(MoeDistributeCombineSetupArch32TilingTest, GeneralCases)
 {
     auto param = GetParam();
     auto tilingContextPara = BuildTilingContextPara(param);
@@ -239,7 +190,7 @@ TEST_P(MoeDistributeCombineSetupArch35TilingTest, GeneralCases)
                        param.expectTilingData, param.expectWorkspaces, param.mc2TilingDataReservedLen);
 }
 
-INSTANTIATE_TEST_CASE_P(MoeDistributeCombineSetupTilingUT, MoeDistributeCombineSetupArch35TilingTest,
+INSTANTIATE_TEST_CASE_P(MoeDistributeCombineSetupArch32TilingUT, MoeDistributeCombineSetupArch32TilingTest,
                         testing::ValuesIn(g_testCases));
 
-} // namespace MoeDistributeCombineSetupUT
+} // namespace MoeDistributeCombineSetupArch32UT
