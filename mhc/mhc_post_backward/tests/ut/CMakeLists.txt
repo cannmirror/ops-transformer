@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------------------------------------
-# Copyright (c) 2026 Huawei Technologies Co., Ltd.
+# Copyright (c) 2025 Huawei Technologies Co., Ltd.
 # This program is free software, you can redistribute it and/or modify it under the terms and conditions of
 # CANN Open Software License Agreement Version 2.0 (the "License").
 # Please refer to the License for details. You may not use this file except in compliance with the License.
@@ -8,28 +8,11 @@
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
 
-if (BUILD_OPEN_PROJECT)
-    target_sources(op_host_aclnnExc PRIVATE
-        mhc_post_backward_def.cpp
-    )
-
-    if("${ASCEND_COMPUTE_UNIT}" STREQUAL "ascend950")
-        add_ops_compile_options(
-            OP_NAME MhcPostBackward
-            COMPUTE_UNIT Ascend950PR_9599
-            OPTIONS -mllvm -cce-aicore-dcci-before-kernel-end=false
-        )
-    else()
-        add_ops_compile_options(
-            OP_NAME MhcPostBackward
-            OPTIONS --cce-auto-sync=off
-                    -Wno-deprecated-declarations
-                    -Werror
-        )
+# 每个目录下需要生成的可执行文件，具体参考：ops/built-in/test/CMakeLists.txt： 50~124
+file(GLOB CURRENT_DIRS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/*)
+message(STATUS "=== Debug: CURRENT_DIRS =${CURRENT_DIRS} ")
+foreach(SUB_DIR ${CURRENT_DIRS})
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${SUB_DIR}/CMakeLists.txt")
+        add_subdirectory(${SUB_DIR})
     endif()
-endif()
-
-if(NOT BUILD_OPS_RTY_KERNEL)
-    add_op_to_compiled_list()
-    add_modules_sources(OPTYPE mhc_post_backward ACLNNTYPE aclnn_exclude)
-endif()
+endforeach()
