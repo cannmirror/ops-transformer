@@ -1,11 +1,11 @@
-# DistributeBarrier
+# DistributeBarrierExtend
 
 ## 产品支持情况
 
 | 产品                                                         | 是否支持 |
 | :----------------------------------------------------------- | :------: |
 | <term>Ascend 950PR/Ascend 950DT</term>                             |    √     |
-| <term>Atlas A3 训练系列产品/Atlas A3 推理系列产品</term>     |    √     |
+| <term>Atlas A3 训练系列产品/Atlas A3 推理系列产品</term>     |    ×     |
 | <term>Atlas A2 训练系列产品/Atlas A2 推理系列产品</term> |    ×     |
 | <term>Atlas 200I/500 A2 推理产品</term>                      |    ×     |
 | <term>Atlas 推理系列产品</term>                             |    ×     |
@@ -15,6 +15,9 @@
 
 算子功能：完成通信域内的全卡同步，xRef仅用于构建Tensor依赖，接口内不对xRef做任何操作。
 
+    相较于MoeDistributeCombineV2算子，该算子变更如下：
+    - 新增`context`入参，存入通信域相关信息；
+    详细说明请参考以下参数说明。
 ## 参数说明
 
 <table style="undefined;table-layout: fixed; width: 1392px"> <colgroup>
@@ -33,6 +36,13 @@
    <th>数据格式</th>
   </tr></thead>
  <tbody>
+  <tr>
+   <td>context</td>
+   <td>输入</td>
+   <td>本卡通信域信息数据。</td>
+   <td>INT32</td>
+   <td>ND</td>
+  </tr>
   <tr>
    <td>xRef</td>
    <td>输入</td>
@@ -70,7 +80,6 @@
   </tr>
  </tbody></table>
 
-  - <term>Atlas A3 训练系列产品/Atlas A3 推理系列产品</term>：不支持FLOAT8_E5M2、FLOAT8_E4M3FN、FLOAT4_E1M2、FLOAT4_E2M1、HIFLOAT8、INT4类型。
   - <term>Ascend 950PR/Ascend 950DT</term>：timeOutOptional参数里的超时时间单位为us，建议配置5000000us，根据实际环境不同超时时间下限可能不同。
 ## 约束说明
 
@@ -86,4 +95,4 @@
 
 | 调用方式  | 样例代码                                  | 说明                                                     |
 | :--------: | :----------------------------------------: | :-------------------------------------------------------: |
-| aclnn接口 | [test_aclnn_distribute_barrier.cpp](./examples/test_aclnn_distribute_barrier.cpp) | 通过[aclnnDistributeBarrier](./docs/aclnnDistributeBarrier.md)接口方式调用distribute_barrier算子。 |
+| aclnn接口 | [test_aclnn_distribute_barrier.cpp](../distribute_barrier/examples/test_aclnn_distribute_barrier.cpp) | 通过[aclnnDistributeBarrier](../distribute_barrier/docs/aclnnDistributeBarrier.md)接口方式调用distribute_barrier_extend算子。 |
