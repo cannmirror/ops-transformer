@@ -7,10 +7,6 @@
 # INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
 # See LICENSE in the root of the software repository for the full text of the License.
 # -----------------------------------------------------------------------------------------------------------
-set(_NsaSelectedAttention_TilingSourcesExt
-        ${OPS_TRANSFORMER_DIR}/attention/nsa_selected_attention/op_host/nsa_selected_attention_tiling.cpp
-        ${OPS_TRANSFORMER_DIR}/attention/nsa_selected_attention/op_host/nsa_selected_attention_tiling_general.cpp
-)
 
 file(GLOB CURRENT_DIRS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/*)
 message(STATUS "=== Debug: CURRENT_DIRS =${CURRENT_DIRS} ")
