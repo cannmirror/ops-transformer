@@ -8,15 +8,16 @@
  * See LICENSE in the root of the software repository for the full text of the License.
  */
 
-#ifndef BLOCK_SPARSE_ATTENTION_H_
-#define BLOCK_SPARSE_ATTENTION_H_
+#ifndef ACLNN_BLOCK_SPARSE_ATTENTION_V2_H_
+#define ACLNN_BLOCK_SPARSE_ATTENTION_V2_H_
 
-#include <array>
-#include "opdev/op_executor.h"
+#include "aclnn/acl_meta.h"
 
-namespace l0op {
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-const std::array<const aclTensor *, 2> BlockSparseAttention(
+__attribute__((visibility("default"))) aclnnStatus aclnnBlockSparseAttentionV2GetWorkspaceSize(
     const aclTensor *query,
     const aclTensor *key,
     const aclTensor *value,
@@ -29,8 +30,8 @@ const std::array<const aclTensor *, 2> BlockSparseAttention(
     const aclTensor *qDequantScaleOptional,
     const aclTensor *kDequantScaleOptional,
     const aclTensor *vDequantScaleOptional,
-    const char *qInputLayout,
-    const char *kvInputLayout,
+    char *qInputLayout,
+    char *kvInputLayout,
     int64_t numKeyValueHeads,
     int64_t maskType,
     double scaleValue,
@@ -39,10 +40,20 @@ const std::array<const aclTensor *, 2> BlockSparseAttention(
     int64_t preTokens,
     int64_t nextTokens,
     int64_t softmaxLseFlag,
-    const aclTensor *attentionOut,
-    aclOpExecutor *executor);
+    aclTensor *attentionOut,
+    aclTensor *softmaxLseOptional,
+    uint64_t *workspaceSize,
+    aclOpExecutor **executor);
 
-} // namespace l0op
+__attribute__((visibility("default"))) aclnnStatus aclnnBlockSparseAttentionV2(
+    void *workspace,
+    uint64_t workspaceSize,
+    aclOpExecutor *executor,
+    aclrtStream stream);
 
-#endif  // BLOCK_SPARSE_ATTENTION_H_
+#ifdef __cplusplus
+}
+#endif
+
+#endif  // ACLNN_BLOCK_SPARSE_ATTENTION_V2_H_
 
