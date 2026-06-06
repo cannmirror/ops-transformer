@@ -1,20 +1,19 @@
 /**
- * Copyright (c) 2025 Huawei Technologies Co., Ltd.
- * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
- * CANN Open Software License Agreement Version 2.0 (the "License").
- * Please refer to the License for details. You may not use this file except in compliance with the License.
- * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
- * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
- * See LICENSE in the root of the software repository for the full text of the License.
- */
+ * Copyright (c) 2025 Huawei Technologies Co., Ltd.
+ * This program is free software, you can redistribute it and/or modify it under the terms and conditions of
+ * CANN Open Software License Agreement Version 2.0 (the "License").
+ * Please refer to the License for details. You may not use this file except in compliance with the License.
+ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE.
+ * See LICENSE in the root of the software repository for the full text of the License.
+ */
 
-#include "aclnn_weight_quant_matmul_all_reduce.h"
+#include "aclnn_weight_quant_matmul_all_reduce_v2.h"
 
 #include "aclnnInner_matmul_all_reduce.h"
 #include "opdev/tensor_view_utils.h"
 #include "matmul_all_reduce_util.h"
 #include "mc2_comm_utils.h"
-#include "log/log.h"
 
 using namespace op;
 
@@ -28,6 +27,8 @@ extern "C" uint64_t NnopbaseMsprofSysTime();
 extern "C" void NnopbaseReportApiInfo(const uint64_t beginTime, NnopbaseDfxId& dfxId);
 extern "C" aclnnStatus __attribute__((weak)) NnopbaseDisableOptionalInput(void* executor, const size_t irIndex);
 extern "C" void __attribute__((weak)) NnopbaseSetHcclServerType(void *executor, NnopbaseHcclServerType sType);
+extern "C" void NnopbaseSetUserHandle(void *executor, void *handle);
+extern "C" void *NnopbaseGetUserHandle(void *executor);
 
 // 根据API定义，需要列出所能支持的所有dtype
 static const std::initializer_list<op::DataType> DTYPE_SUPPORT_LIST = {DataType::DT_FLOAT16, DataType::DT_BF16};
@@ -79,6 +80,8 @@ static bool CheckDtypeValid(
     // 检查bias、offset、x3的数据类型是否在算子的支持列表内
     if (bias != nullptr) {
         OP_CHECK_DTYPE_NOT_SUPPORT(bias, biasDtypeSupportList, return false);
+        const auto x1Dtype = x1->GetDataType();
+        const auto biasDtype = bias->GetDataType();
             // 检查x1和bias的数据类型是否相同
         OP_CHECK_DTYPE_NOT_SAME(bias, x1, return false);
     }
@@ -100,11 +103,11 @@ static bool CheckDtypeValid(
 static bool CheckAttr(const char* reduceOp, int64_t streamMode, int64_t antiquantGroupSize, const aclTensor* x1)
 {
     if (strcmp(reduceOp, REDUCE_OP_SUM) != 0) {
-        OP_LOGE_FOR_INVALID_VALUE("aclnnWeightQuantMatmulAllReduce", "reduceOp", reduceOp, "\"sum\"");
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID, "Expected reduceOp to be sum, but got %s.", reduceOp);
         return false;
     }
     if (streamMode != NUM_ACL_STOP_ON_FAILURE) {
-        OP_LOGE_FOR_INVALID_VALUE("aclnnWeightQuantMatmulAllReduce", "streamMode", std::to_string(streamMode).c_str(), "\"1\"");
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID, "Expected streamMode to be 1, but got %ld.", streamMode);
         return false;
     }
 
@@ -112,7 +115,7 @@ static bool CheckAttr(const char* reduceOp, int64_t streamMode, int64_t antiquan
     int64_t kLen = x1->GetViewShape().GetDim(x1Len - 1);
     // if kLen equals to 0, no need to check antiquantGroupSize for per-group
     if (kLen == 0) {
-        OP_LOGD("WeightQuantMatmulAllReduce, k value is equal to 0.");
+        OP_LOGD("WeightQuantMatmulAllReduceV2, k value is equal to 0.");
         return true;
     }
 
@@ -123,10 +126,9 @@ static bool CheckAttr(const char* reduceOp, int64_t streamMode, int64_t antiquan
     if (antiquantGroupSize % ANTIQUANT_GROUP_SIZE_MIN_VALUE != 0 ||
         antiquantGroupSize < ANTIQUANT_GROUP_SIZE_MIN_VALUE ||
         antiquantGroupSize > std::min(static_cast<int32_t>(kLen - 1), INT32_MAX)) {
-        OP_LOGE_FOR_INVALID_VALUE_WITH_REASON("aclnnWeightQuantMatmulAllReduce", "antiquantGroupSize",
-            std::to_string(antiquantGroupSize).c_str(),
-            std::string("The value of antiquantGroupSize must be in range [" + std::to_string(ANTIQUANT_GROUP_SIZE_MIN_VALUE) +
-                ", min(" + std::to_string(kLen - 1) + ", INT_MAX)]").c_str());
+        OP_LOGE(
+            ACLNN_ERR_PARAM_INVALID, "antiquantGroupSize should be in range [%ld, min(%ld, INT_MAX)], Actual is %ld.",
+            ANTIQUANT_GROUP_SIZE_MIN_VALUE, (kLen - 1), antiquantGroupSize);
         return false;
     }
     return true;
@@ -183,17 +185,20 @@ static bool CheckShape(
     OP_LOGD("MatmulAllReduce, CheckShape weightDim is %lu", weightDim);
     // x2的维度为2维,x1的维度为2D或者3D，output的维数与x1一致,weightNZ场景下，x2可能为4维
     OP_CHECK_WRONG_DIMENSION(x2, weightDim, return false);
-    uint64_t x2Dim0 = QuantMatmulAllReduceIsAclnnPreTransposed(x2) ? x2->GetViewShape().GetDim(1) : x2->GetViewShape().GetDim(0);
-    uint64_t x2Dim1 = QuantMatmulAllReduceIsAclnnPreTransposed(x2) ? x2->GetViewShape().GetDim(0) : x2->GetViewShape().GetDim(1);
+    uint64_t x2Dim0 = QuantMatmulAllReduceIsAclnnPreTransposed(x2) ?
+        x2->GetViewShape().GetDim(1) : x2->GetViewShape().GetDim(0);
+    uint64_t x2Dim1 = QuantMatmulAllReduceIsAclnnPreTransposed(x2) ?
+        x2->GetViewShape().GetDim(0) : x2->GetViewShape().GetDim(1);
     auto x2ShapeStr = op::ToString(x2->GetViewShape());
     QuantMatmulAllReduceProcessTransposedX2(x2, x2Dim0, x2Dim1, x2ShapeStr);
     // 仅支持x2矩阵转置，x1不支持转置, x1.GetDimNum(1) == x2.GetDimNum(0)
     const size_t x1Len = x1->GetViewShape().GetDimNum();
     OP_LOGD("MatmulAllReduce, CheckShape x1Len is %lu", x1Len);
     if (x1->GetViewShape().GetDim(x1Len - 1) != x2Dim0) {
-        OP_LOGE_FOR_INVALID_SHAPE_WITH_REASON("aclnnWeightQuantMatmulAllReduce", "x1",
-            op::ToString(x1->GetViewShape()).GetString(),
-            std::string("The shape [last dim] of x1 must be equal to first dim of x2, but x2 shape is " + std::string(x2ShapeStr.GetString())).c_str());
+        OP_LOGE(
+            ACLNN_ERR_PARAM_INVALID,
+            "Expected last dim of x1 to be equal to first dim of x2, but got x1 shape: %s, x2 shape: %s.",
+            op::ToString(x1->GetViewShape()).GetString(), x2ShapeStr.GetString());
         return false;
     }
 
@@ -204,8 +209,8 @@ static bool CheckShape(
 
     // 判断output是否为空tensor
     if (output->IsEmpty()) {
-        OP_LOGE_FOR_INVALID_SHAPE("aclnnWeightQuantMatmulAllReduce", "output",
-            op::ToString(output->GetViewShape()).GetString(), "non-empty tensor");
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID, "Output is empty tensor, output shape is: %s",
+            op::ToString(output->GetViewShape()).GetString());
         return false;
     }
 
@@ -232,17 +237,20 @@ static bool CheckShape(
     OP_CHECK_MAX_DIM(scale, TWO_DIMS, return false);
     if (!IsAntiquantScaleShapeValid(scale, x1, output, antiquantGroupSize)) {
         if (antiquantGroupSize == 0) {
-            OP_LOGE_FOR_INVALID_SHAPE("aclnnWeightQuantMatmulAllReduce", "antiquantScale",
-                op::ToString(scale->GetViewShape()).GetString(),
-                std::string("[1] or [n] or [1,n], last dim should be " +
-                    std::to_string(output->GetViewShape().GetDim(x1Len - 1)) + " or 1").c_str());
+            OP_LOGE(
+                ACLNN_ERR_PARAM_INVALID,
+                "Expected shape of antiquantScale to be [1] or [n] or [1,n] for per-tensor/per-channel."
+                " in this case, n is %ld, last dim of scale should be %ld or 1, "
+                "but got scale shape: %s.",
+                output->GetViewShape().GetDim(x1Len - 1), output->GetViewShape().GetDim(x1Len - 1),
+                op::ToString(scale->GetViewShape()).GetString());
         }
         if (antiquantGroupSize != 0) {
             size_t kValueGroup = CeilDiv(x1->GetViewShape().GetDim(x1Len - 1), antiquantGroupSize);
-            OP_LOGE_FOR_INVALID_SHAPE("aclnnWeightQuantMatmulAllReduce", "antiquantScale",
-                op::ToString(scale->GetViewShape()).GetString(),
-                std::string("[" + std::to_string(kValueGroup) + "," +
-                    std::to_string(output->GetViewShape().GetDim(x1Len - 1)) + "] for per-group calculation").c_str());
+            OP_LOGE(
+                ACLNN_ERR_PARAM_INVALID,
+                "Expected shape of antiquantScale to be [%zu,%ld] for per-group calculation, but got scale shape: %s.",
+                kValueGroup, output->GetViewShape().GetDim(x1Len - 1), op::ToString(scale->GetViewShape()).GetString());
         }
         return false;
     }
@@ -278,13 +286,11 @@ static bool CheckContiguous(const aclTensor *x2, const aclTensor *scale, const a
         return true;
     }
     if (IsAffineInconsistent(scale, transposeX2)) {
-        OP_LOGE_FOR_INVALID_VALUE_WITH_REASON("aclnnWeightQuantMatmulAllReduce", "scale", "inconsistent",
-            "The value of scale must be consistent with x2 when x2 is contiguous or transpose");
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID, "When x2 is contiguous or transpose, scale should be consistent with it.");
         return false;
     }
     if (IsAffineInconsistent(offset, transposeX2)) {
-        OP_LOGE_FOR_INVALID_VALUE_WITH_REASON("aclnnWeightQuantMatmulAllReduce", "offset", "inconsistent",
-            "The value of offset must be consistent with x2 when x2 is contiguous or transpose");
+        OP_LOGE(ACLNN_ERR_PARAM_INVALID, "When x2 is contiguous or transpose, offset should be consistent with it.");
         return false;
     }
     return true;
@@ -293,8 +299,8 @@ static bool CheckContiguous(const aclTensor *x2, const aclTensor *scale, const a
 
 static aclnnStatus CheckParams(
     const aclTensor* x1, const aclTensor* x2, const aclTensor* bias, const aclTensor* antiquantScale,
-    const aclTensor* antiquantOffset, const aclTensor* x3, const char* reduceOp, int64_t streamMode,
-    const aclTensor* output, int64_t antiquantGroupSize)
+    const aclTensor* antiquantOffset, const aclTensor* x3, const char* reduceOp, const char* commMode,
+    int64_t streamMode, const aclTensor* output, int64_t antiquantGroupSize)
 {
     // 1. 检查参数是否为空指针
     CHECK_RET(CheckNotNull(x1, x2, antiquantScale, output), ACLNN_ERR_PARAM_NULLPTR);
@@ -321,6 +327,9 @@ static aclnnStatus CheckParams(
     }
     // 6. 检查连续性
     CHECK_RET(ContiguousCheckImpl::CheckContiguous(x2, antiquantScale, antiquantOffset), ACLNN_ERR_PARAM_INVALID);
+
+    // 7. 检查commMode是否合法
+    CHECK_RET(IsCommModeValid(commMode), ACLNN_ERR_PARAM_INVALID);
     return ACLNN_SUCCESS;
 }
 
@@ -331,7 +340,7 @@ static const aclTensor* CopyTensor(const aclTensor* x2)
     for (size_t i = 0; i < storageDimsNum; i++) {
         storageDims[i] = x2->GetStorageShape().GetDim(i);
     }
-    OP_LOGD("WeightQuantMatmulAllReduce, CopyTensor storageDimsNum is %lu.", storageDimsNum);
+    OP_LOGD("WeightQuantMatmulAllReduceV2, CopyTensor storageDimsNum is %lu.", storageDimsNum);
     aclDataType dataType = aclDataType::ACL_DT_UNDEFINED;
     aclGetDataType(x2, &dataType);
     std::vector<int64_t> stride(storageDimsNum, 1);
@@ -342,7 +351,7 @@ static const aclTensor* CopyTensor(const aclTensor* x2)
     aclFormat format = aclFormat::ACL_FORMAT_UNDEFINED;
     auto stgFormat = ge::GetPrimaryFormat(x2->GetStorageFormat());
     if (stgFormat == Format::FORMAT_ND) {
-        OP_LOGD("WeightQuantMatmulAllReduce, CopyTensor format is ACL_FORMAT_ND");
+        OP_LOGD("WeightQuantMatmulAllReduceV2, CopyTensor format is ACL_FORMAT_ND");
         format = aclFormat::ACL_FORMAT_ND;
     } else if (stgFormat == Format::FORMAT_FRACTAL_NZ) {
         format = aclFormat::ACL_FORMAT_FRACTAL_NZ;
@@ -352,16 +361,16 @@ static const aclTensor* CopyTensor(const aclTensor* x2)
         x2->GetTensor()->GetAddr());
 }
 
-aclnnStatus aclnnWeightQuantMatmulAllReduceGetWorkspaceSize(
+aclnnStatus aclnnWeightQuantMatmulAllReduceV2GetWorkspaceSize(
     const aclTensor* x1, const aclTensor* x2, const aclTensor* bias, const aclTensor* antiquantScale,
-    const aclTensor* antiquantOffset, const aclTensor* x3, const char* group, const char* reduceOp, int64_t commTurn,
-    int64_t streamMode, int64_t antiquantGroupSize, const aclTensor* output, uint64_t* workspaceSize,
-    aclOpExecutor** executor)
+    const aclTensor* antiquantOffset, const aclTensor* x3, const char* group, const char* reduceOp,
+    const char* commMode, int64_t commTurn, int64_t streamMode, int64_t antiquantGroupSize,
+    const aclTensor* output, uint64_t* workspaceSize, aclOpExecutor** executor)
 {
     uint64_t timeStamp = NnopbaseMsprofSysTime();
     // 固定写法，参数检查
     auto retParam = CheckParams(
-        x1, x2, bias, antiquantScale, antiquantOffset, x3, reduceOp, streamMode, output, antiquantGroupSize);
+        x1, x2, bias, antiquantScale, antiquantOffset, x3, reduceOp, commMode, streamMode, output, antiquantGroupSize);
     CHECK_RET(retParam == ACLNN_SUCCESS, retParam);
     const size_t x1DimNum = x1->GetOriginalShape().GetDimNum();
     if (x1DimNum < 1 || x1DimNum > THREE_DIMS) {
@@ -375,20 +384,37 @@ aclnnStatus aclnnWeightQuantMatmulAllReduceGetWorkspaceSize(
     aclTensor* commQuantScale1 = nullptr;
     aclTensor* commQuantScale2 = nullptr;
     aclTensor* dequantScale = nullptr;
-    if(x2->GetTensor() == nullptr){
-        OP_LOGE_WITH_INVALID_INPUT("aclnnWeightQuantMatmulAllReduce", "x2");
+    if (x2->GetTensor() == nullptr) {
+        OP_LOGE(ACLNN_ERR_INNER_NULLPTR, "Tensor of x2 is null.");
         return ACLNN_ERR_INNER_NULLPTR;
     }
     auto copyX2 = CopyTensor(x2);
     auto tempX2 = MatmulAllReduceIsWeightNZFormat(x2) ? copyX2 : x2;
     uint64_t yDtype = static_cast<uint64_t>(output->GetDataType());
-    const char* commModePtr = (op::GetCurrentPlatformInfo().GetCurNpuArch() == NpuArch::DAV_3510) ? "ccu" : "";
     aclnnStatus ret = aclnnInnerMatmulAllReduceGetWorkspaceSize(
         x1, tempX2, bias, x3, antiquantScale, antiquantOffset, dequantScale, pertokenScale, commQuantScale1,
         commQuantScale2, const_cast<char*>(group), const_cast<char*>(reduceOp),
-        transposeX1, transposeX2, commTurn, antiquantGroupSize, 0, yDtype, 0, const_cast<char*>(commModePtr), output,
+        transposeX1, transposeX2, commTurn, antiquantGroupSize, 0, yDtype, 0, const_cast<char*>(commMode), output,
         workspaceSize, executor);
-    OP_LOGD("WeightQuantMatmulAllReduce, aclnnMatmulAllReduceGetWorkspaceSize ret %d", ret);
+    OP_LOGD("WeightQuantMatmulAllReduceV2, aclnnMatmulAllReduceGetWorkspaceSize ret %d", ret);
+    if ((ret == ACLNN_SUCCESS) && (executor != nullptr) && (*executor != nullptr)) {
+        // SetUserHandle to pass comm_mode to aclnnWeightQuantMatmulAllReduceV2
+        char* commModePtr = new(std::nothrow) char[strlen(commMode) + 1];
+        if (commModePtr == nullptr) {
+            OP_LOGE(ACLNN_ERR_INNER_NULLPTR,
+                    "[WeightQuantMatmulAllReduceV2] Failed to allocate memory for commMode.");
+            return ACLNN_ERR_INNER;
+        } else {
+            errno_t err = strcpy_s(commModePtr, strlen(commMode) + 1, commMode);
+            if (err != EOK) {
+                OP_LOGE(ACLNN_ERR_INNER, "[WeightQuantMatmulAllReduceV2] strcpy_s failed, err = %d", err);
+                delete[] commModePtr;
+                return ACLNN_ERR_INNER;
+            }
+            NnopbaseSetUserHandle(*executor, commModePtr);
+            OP_LOGD("[WeightQuantMatmulAllReduceV2] GetWorkspaceSize set commMode = %s", commMode);
+        }
+    }
 #ifdef MC2_UT
     ret = 0;
 #endif
@@ -400,25 +426,39 @@ aclnnStatus aclnnWeightQuantMatmulAllReduceGetWorkspaceSize(
             NnopbaseDisableOptionalInput(*executor, 9U); // 9 is input irIndex
         }
     }
-    OP_LOGD("WeightQuantMatmulAllReduce, end ret %d", ret);
+    OP_LOGD("WeightQuantMatmulAllReduceV2, end ret %d", ret);
     static NnopbaseDfxId dfxId = {0x60000, __func__, false};
     NnopbaseReportApiInfo(timeStamp, dfxId);
     return ret;
 }
 
-aclnnStatus aclnnWeightQuantMatmulAllReduce(
+aclnnStatus aclnnWeightQuantMatmulAllReduceV2(
     void* workspace, uint64_t workspaceSize, aclOpExecutor* executor, const aclrtStream stream)
 {
     uint64_t timeStamp = NnopbaseMsprofSysTime();
     if (NnopbaseSetHcclServerType) {
-        if (op::GetCurrentPlatformInfo().GetCurNpuArch() == NpuArch::DAV_3510) {
-            NnopbaseSetHcclServerType(executor, NnopbaseHcclServerType::NNOPBASE_HCCL_SERVER_TYPE_CCU);
+        if (GetCurrentPlatformInfo().GetCurNpuArch() == NpuArch::DAV_3510) {
+            char* commMode = reinterpret_cast<char*>(NnopbaseGetUserHandle(executor));
+            if (strcmp(commMode, COMM_MODE_CCU) == 0) {
+                OP_LOGD("A5 aclnnWeightQuantMatmulAllReduceV2, commMode is 'ccu', use CCU mode");
+                NnopbaseSetHcclServerType(executor, NnopbaseHcclServerType::NNOPBASE_HCCL_SERVER_TYPE_CCU);
+            } else if (strcmp(commMode, COMM_MODE_AICPU) == 0) {
+                OP_LOGD("A5 aclnnWeightQuantMatmulAllReduceV2, commMode is 'aicpu', use AICPU mode");
+                NnopbaseSetHcclServerType(executor, NnopbaseHcclServerType::NNOPBASE_HCCL_SERVER_TYPE_AICPU);
+            } else if (strcmp(commMode, COMM_MODE_DEFAULT) == 0) {
+                OP_LOGD("A5 aclnnWeightQuantMatmulAllReduceV2, commMode is '', use CCU mode");
+                NnopbaseSetHcclServerType(executor, NnopbaseHcclServerType::NNOPBASE_HCCL_SERVER_TYPE_CCU);
+            }
+            delete[] commMode;
+        } else {
+            OP_LOGD("A2 aclnnWeightQuantMatmulAllReduceV2: use AICPU mode");
+            NnopbaseSetHcclServerType(executor, NnopbaseHcclServerType::NNOPBASE_HCCL_SERVER_TYPE_AICPU);
         }
     }
     aclnnStatus ret = aclnnInnerMatmulAllReduce(workspace, workspaceSize, executor, stream);
-    OP_LOGD("WeightQuantMatmulAllReduce, aclnnWeightQuantMatmulAllReduce ret %d", ret);
-    if (ret != 0) {
-        OP_LOGE_LIBOPAPI_REPORT("aclnnWeightQuantMatmulAllReduce", "WeightQuantMatmulAllReduce, This is an error in launch aicore");
+    OP_LOGD("WeightQuantMatmulAllReduceV2, aclnnWeightQuantMatmulAllReduceV2 ret %d", ret);
+    if (ret != ACLNN_SUCCESS) {
+        OP_LOGE(ACLNN_ERR_INNER, "WeightQuantMatmulAllReduceV2, This is an error in launch aicore");
         return ACLNN_ERR_INNER;
     }
 
